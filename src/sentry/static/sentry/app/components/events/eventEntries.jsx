@@ -38,6 +38,7 @@ import space from 'app/styles/space';
 import withOrganization from 'app/utils/withOrganization';
 
 import BreadcrumbsInterface from './eventEntriesBreadcrumbs';
+import EventRelatedEvents from './eventRelatedEvents';
 
 export const INTERFACES = {
   exception: ExceptionInterface,
@@ -177,9 +178,9 @@ class EventEntries extends React.Component {
       location,
     } = this.props;
 
-    const features =
-      organization && organization.features ? new Set(organization.features) : new Set();
+    const features = new Set(organization.features);
     const hasQueryFeature = features.has('discover-query');
+    const isIssuesPage = location?.pathname?.split('/')[3] === 'issues';
 
     if (!event) {
       return (
@@ -241,6 +242,13 @@ class EventEntries extends React.Component {
         {!objectIsEmpty(event.sdk) && <EventSdk event={event} />}
         {!isShare && event.sdkUpdates && event.sdkUpdates.length > 0 && (
           <EventSdkUpdates event={event} />
+        )}
+        {!isIssuesPage && (
+          <EventRelatedEvents
+            location={location}
+            event={event}
+            organization={organization}
+          />
         )}
         {!isShare && event.groupID && (
           <EventGroupingInfo

@@ -3,9 +3,17 @@ import PropTypes from 'prop-types';
 import React from 'react';
 import * as ReactRouter from 'react-router';
 import * as Sentry from '@sentry/react';
+import uniqBy from 'lodash/uniqBy';
 
 import {Client} from 'app/api';
-import {Group, Organization, Project} from 'app/types';
+import {
+  Group,
+  Organization,
+  Project,
+  Event,
+  AvatarProject,
+  GlobalSelection,
+} from 'app/types';
 import {PageContent} from 'app/styles/organization';
 import {callIfFunction} from 'app/utils/callIfFunction';
 import {t} from 'app/locale';
@@ -17,8 +25,12 @@ import Projects from 'app/utils/projects';
 import SentryTypes from 'app/sentryTypes';
 import recreateRoute from 'app/utils/recreateRoute';
 import withApi from 'app/utils/withApi';
+import DiscoverQuery, {TableDataRow} from 'app/utils/discover/discoverQuery';
+import EventView from 'app/utils/discover/eventView';
+import withGlobalSelection from 'app/utils/withGlobalSelection';
 
 import {ERROR_TYPES} from './constants';
+import {fetchGroupEventAndMarkSeen} from './utils';
 import GroupHeader from './header';
 
 type Error = typeof ERROR_TYPES[keyof typeof ERROR_TYPES] | null;
@@ -29,7 +41,11 @@ type Props = {
   environments: string[];
   children: React.ReactNode;
   isGlobalSelectionReady: boolean;
-} & ReactRouter.RouteComponentProps<{orgId: string; groupId: string}, {}>;
+  selection: GlobalSelection;
+} & ReactRouter.RouteComponentProps<
+  {orgId: string; groupId: string; eventId?: string},
+  {}
+>;
 
 type State = {
   group: Group | null;
@@ -37,6 +53,7 @@ type State = {
   error: boolean;
   errorType: Error;
   project: null | (Pick<Project, 'id' | 'slug'> & Partial<Pick<Project, 'platform'>>);
+  event?: Event;
 };
 
 class GroupDetails extends React.Component<Props, State> {
@@ -58,9 +75,13 @@ class GroupDetails extends React.Component<Props, State> {
     this.fetchData();
   }
 
-  componentDidUpdate(prevProps: Props) {
+  componentDidUpdate(prevProps: Props, prevState: State) {
     if (prevProps.isGlobalSelectionReady !== this.props.isGlobalSelectionReady) {
       this.fetchData();
+    }
+
+    if (!prevState?.group && this.state.group) {
+      this.getEvent(this.state.group);
     }
   }
 
@@ -85,6 +106,29 @@ class GroupDetails extends React.Component<Props, State> {
 
   get groupDetailsEndpoint() {
     return `/issues/${this.props.params.groupId}/`;
+  }
+
+  async getEvent(group: Group) {
+    const {params, environments, api, organization} = this.props;
+    const orgSlug = organization.slug;
+    const groupId = group.id;
+    const projSlug = group.project.slug;
+    const eventId = params?.eventId || 'latest';
+
+    try {
+      const event = await fetchGroupEventAndMarkSeen(
+        api,
+        orgSlug,
+        projSlug,
+        groupId,
+        eventId,
+        environments
+      );
+      this.setState({event});
+    } catch (err) {
+      // This is an expected error, capture to Sentry so that it is not considered as an unhandled error
+      Sentry.captureException(err);
+    }
   }
 
   async fetchData() {
@@ -138,9 +182,9 @@ class GroupDetails extends React.Component<Props, State> {
 
       this.setState({
         error: false,
-        loading: false,
         errorType: null,
         project,
+        loading: false,
       });
 
       GroupStore.loadInitialData([data]);
@@ -154,9 +198,9 @@ class GroupDetails extends React.Component<Props, State> {
       }
 
       this.setState({
-        loading: false,
         error: true,
         errorType,
+        loading: false,
       });
     }
   }
@@ -207,24 +251,6 @@ class GroupDetails extends React.Component<Props, State> {
     }
   }
 
-  renderContent(project) {
-    const {children, environments} = this.props;
-    const {group} = this.state;
-
-    return (
-      <React.Fragment>
-        <GroupHeader project={project} group={group} />
-        {React.isValidElement(children)
-          ? React.cloneElement(children, {
-              environments,
-              group,
-              project,
-            })
-          : children}
-      </React.Fragment>
-    );
-  }
-
   renderError() {
     if (!this.state.error) {
       return null;
@@ -238,6 +264,101 @@ class GroupDetails extends React.Component<Props, State> {
       default:
         return <LoadingError onRetry={this.remountComponent} />;
     }
+  }
+
+  getEventView() {
+    const {organization, selection} = this.props;
+    const {event} = this.state;
+
+    const orgFeatures = new Set(organization.features);
+    const period = selection.datetime.period;
+
+    // traceId should always be defined
+    const traceId = event?.contexts?.trace?.trace_id;
+
+    if (!traceId) {
+      return undefined;
+    }
+
+    return EventView.fromSavedQuery({
+      id: undefined,
+      name: `Events with Trace ID ${traceId}`,
+      fields: [
+        'title',
+        'event.type',
+        'project',
+        'project.id',
+        'trace.span',
+        'timestamp',
+        'lastSeen',
+        'issue',
+      ],
+      orderby: '-timestamp',
+      query: `trace:${traceId}`,
+      projects: orgFeatures.has('global-views') ? [-1] : [Number(event?.projectID)],
+      version: 2,
+      range: period ?? '24h',
+    });
+  }
+
+  renderInnerContent(
+    project: AvatarProject,
+    relatedEvents: Array<TableDataRow>,
+    eventView?: EventView
+  ) {
+    const {children, environments} = this.props;
+    const {group, event} = this.state;
+
+    return (
+      <React.Fragment>
+        <GroupHeader
+          project={project}
+          group={group}
+          relatedEventsQuantity={relatedEvents.length}
+        />
+        {React.isValidElement(children)
+          ? React.cloneElement(children, {
+              environments,
+              group,
+              project,
+              event,
+              relatedEvents,
+              eventView,
+            })
+          : children}
+      </React.Fragment>
+    );
+  }
+
+  renderContent(project: AvatarProject) {
+    const eventView = this.getEventView();
+
+    if (!eventView) {
+      return this.renderInnerContent(project, []);
+    }
+
+    const {location, organization} = this.props;
+    const {event} = this.state;
+
+    return (
+      <DiscoverQuery
+        location={location}
+        eventView={eventView}
+        orgSlug={organization.slug}
+      >
+        {discoverData => {
+          if (discoverData.isLoading) {
+            return <LoadingIndicator />;
+          }
+
+          const relatedEvents = uniqBy(discoverData.tableData?.data, 'id').filter(
+            evt => evt.id !== event?.id
+          );
+
+          return this.renderInnerContent(project, relatedEvents, eventView);
+        }}
+      </DiscoverQuery>
+    );
   }
 
   render() {
@@ -289,4 +410,4 @@ class GroupDetails extends React.Component<Props, State> {
   }
 }
 
-export default withApi(Sentry.withProfiler(GroupDetails));
+export default withApi(withGlobalSelection(Sentry.withProfiler(GroupDetails)));

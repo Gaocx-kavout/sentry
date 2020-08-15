@@ -15,15 +15,18 @@ jest.unmock('app/utils/recreateRoute');
 describe('groupDetails', function() {
   let wrapper;
   const group = TestStubs.Group();
+  const event = TestStubs.Event();
+  const location = TestStubs.location({
+    pathname: `/organizations/org-slug/issues/${group.id}/`,
+    query: {},
+    search: '?foo=bar',
+    hash: '#hash',
+  });
+
   const {organization, project, router, routerContext} = initializeOrg({
     project: TestStubs.Project(),
     router: {
-      location: {
-        pathname: `/organizations/org-slug/issues/${group.id}/`,
-        query: {},
-        search: '?foo=bar',
-        hash: '#hash',
-      },
+      location,
       params: {
         groupId: group.id,
       },
@@ -59,12 +62,33 @@ describe('groupDetails', function() {
   };
 
   let issueDetailsMock;
+
   beforeEach(function() {
     ProjectsStore.loadInitialData(organization.projects);
     MockComponent = jest.fn(() => null);
     issueDetailsMock = MockApiClient.addMockResponse({
       url: `/issues/${group.id}/`,
       body: {...group},
+    });
+    MockApiClient.addMockResponse({
+      url: `/issues/${group.id}/events/latest/`,
+      statusCode: 200,
+      body: {
+        ...event,
+      },
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/eventsv2/',
+      body: {
+        data: [],
+      },
+    });
+    MockApiClient.addMockResponse({
+      url: `/projects/org-slug/${project.slug}/issues/`,
+      method: 'PUT',
+      body: {
+        hasSeen: false,
+      },
     });
     MockApiClient.addMockResponse({
       url: '/organizations/org-slug/projects/',
@@ -75,6 +99,7 @@ describe('groupDetails', function() {
       body: [],
     });
   });
+
   afterEach(async function() {
     if (wrapper) {
       wrapper.unmount();
@@ -101,6 +126,7 @@ describe('groupDetails', function() {
 
     ProjectsStore.loadInitialData(organization.projects);
     await tick();
+    await tick();
 
     expect(MockComponent).toHaveBeenLastCalledWith(
       {
@@ -110,6 +136,9 @@ describe('groupDetails', function() {
           id: project.id,
           slug: project.slug,
         }),
+        event,
+        eventView: undefined,
+        relatedEvents: [],
       },
       {}
     );
@@ -199,6 +228,9 @@ describe('groupDetails', function() {
           id: project.id,
           slug: project.slug,
         }),
+        event,
+        eventView: undefined,
+        relatedEvents: [],
       },
       {}
     );

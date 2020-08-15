@@ -30,6 +30,7 @@ class GroupHeader extends React.Component {
     api: PropTypes.object,
     group: SentryTypes.Group.isRequired,
     project: SentryTypes.Project,
+    relatedEventsQuantity: PropTypes.number,
   };
 
   static contextTypes = {
@@ -63,7 +64,7 @@ class GroupHeader extends React.Component {
   }
 
   render() {
-    const {project, group} = this.props;
+    const {project, group, relatedEventsQuantity} = this.props;
     const {organization, location} = this.context;
     const projectFeatures = new Set(project ? project.features : []);
     const organizationFeatures = new Set(organization ? organization.features : []);
@@ -202,6 +203,12 @@ class GroupHeader extends React.Component {
             }}
           >
             {t('Details')}
+          </ListLink>
+          <ListLink
+            to={`${baseUrl}${groupId}/related-events/${location.search}`}
+            isActive={() => location.pathname.includes('/related-events/')}
+          >
+            {t('Related Events')} <Badge text={relatedEventsQuantity} />
           </ListLink>
           <ListLink
             to={`${baseUrl}${groupId}/activity/${location.search}`}
